@@ -1,158 +1,104 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <iostream>
-#include <string>
-#include <limits>
-#include <sstream>
-#include <iomanip> // Для форматування виводу
+#include <cstdio>
+#include <chrono>
 
 #pragma comment(lib, "Ws2_32.lib")
 
-#define PORT 5000
-#define SERVER "127.0.0.1"
-
-using namespace std;
-
-enum DataType {
-    TYPE_DOUBLE = 1,
-    TYPE_LONG = 2
-};
-
-struct Message {
-    DataType type;
-    union {
-        double doubleValue;
-        long longValue;
-    } data;
-};
-
-// Функція для перевірки, чи можна безпечно конвертувати рядок у long
-bool isValidLong(const string& str) {
-    try {
-        size_t pos;
-        long value = stol(str, &pos);
-        return pos == str.length(); // Перевірка, чи весь рядок було конвертовано
-    } catch (const std::out_of_range&) {
-        return false; // Число надто велике для long
-    } catch (const std::invalid_argument&) {
-        return false; // Рядок не є числом
-    }
-    return true;
-}
-
-// Функція для перевірки, чи можна безпечно конвертувати рядок у double
-bool isValidDouble(const string& str) {
-    try {
-        size_t pos;
-        double value = stod(str, &pos);
-        return pos == str.length(); // Перевірка, чи весь рядок було конвертовано
-    } catch (const std::out_of_range&) {
-        return false; // Число надто велике для double
-    } catch (const std::invalid_argument&) {
-        return false; // Рядок не є числом
-    }
-    return true;
-}
-
 int main() {
-    WSAData wsaData;
+    printf("Client starting...\n");
+    fflush(stdout);
+
+    // Ініціалізація Winsock
+    WSADATA wsaData;
     if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
-        cerr << "WSAStartup failed!" << endl;
+        printf("WSAStartup failed with error: %d\n", WSAGetLastError());
         return 1;
     }
+    printf("WSA started\n");
+    fflush(stdout);
 
-    SOCKET clientSocket = socket(AF_INET, SOCK_STREAM, 0);
-    if (clientSocket == INVALID_SOCKET) {
-        cerr << "Socket creation failed!" << endl;
+    // Створення сокета
+    SOCKET connectSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (connectSocket == INVALID_SOCKET) {
+        printf("Socket creation failed with error: %d\n", WSAGetLastError());
         WSACleanup();
         return 1;
     }
+    printf("Socket created\n");
+    fflush(stdout);
 
-    sockaddr_in serverAddr = {};
+    // Налаштування адреси сервера
+    sockaddr_in serverAddr;
     serverAddr.sin_family = AF_INET;
-    serverAddr.sin_port = htons(PORT);
-    inet_pton(AF_INET, SERVER, &serverAddr.sin_addr);
+    serverAddr.sin_port = htons(8888); // Використовуємо той самий порт, що й на сервері
 
-    if (connect(clientSocket, (sockaddr*)&serverAddr, sizeof(serverAddr)) == SOCKET_ERROR) {
-        cerr << "Connection failed! Make sure the server is running." << endl;
-        closesocket(clientSocket);
+    // Перетворення IP-адреси
+    if (inet_pton(AF_INET, "127.0.0.1", &serverAddr.sin_addr) != 1) {
+        printf("inet_pton failed with error: %d\n", WSAGetLastError());
+        closesocket(connectSocket);
+        WSACleanup();
+        return 1;
+    }
+    printf("Server address set\n");
+    fflush(stdout);
+
+    // Підключення до сервера
+    printf("Connecting to server...\n");
+    fflush(stdout);
+
+    if (connect(connectSocket, (struct sockaddr*)&serverAddr, sizeof(serverAddr)) == SOCKET_ERROR) {
+        printf("Unable to connect to server: %d\n", WSAGetLastError());
+        closesocket(connectSocket);
         WSACleanup();
         return 1;
     }
 
-    cout << "Connected to server!" << endl;
+    printf("Connected to server!\n");
+    fflush(stdout);
 
-    Message message;
-    int choice;
-    string input;
+    // Підготовка даних - три double і один long (у масиві double для простоти)
+    double numbers[4] = {3.14159, 2.71828, 1.41421, 12345.0}; // Останнє число представляє long
 
-    while (true) {
-        cout << "Select data type (1 for double, 2 for long, 0 to exit): ";
-        cin >> choice;
+    // Вимірювання часу
+    auto start = std::chrono::high_resolution_clock::now();
 
-        // Очищення буфера введення
-        cin.ignore(numeric_limits<streamsize>::max(), '\n');
+    // Надсилання всіх чисел одразу
+    int bytesSent = send(connectSocket, (char*)numbers, sizeof(numbers), 0);
 
-        if (choice == 0) break;
+    if (bytesSent == SOCKET_ERROR) {
+        printf("Send failed with error: %d\n", WSAGetLastError());
+    } else {
+        printf("Sent %d bytes\n", bytesSent);
 
-        if (choice == TYPE_DOUBLE) {
-            message.type = TYPE_DOUBLE;
+        // Отримання відповіді
+        double response[4];
+        int bytesReceived = recv(connectSocket, (char*)response, sizeof(response), 0);
 
-            while (true) {
-                cout << "Enter double value: ";
-                getline(cin, input);
-
-                if (isValidDouble(input)) {
-                    message.data.doubleValue = stod(input);
-                    break;
-                } else {
-                    cout << "Warning: Invalid double value or number too large. Please try again." << endl;
-                }
-            }
-
-        } else if (choice == TYPE_LONG) {
-            message.type = TYPE_LONG;
-
-            while (true) {
-                cout << "Enter long value: ";
-                getline(cin, input);
-
-                if (isValidLong(input)) {
-                    message.data.longValue = stol(input);
-                    break;
-                } else {
-                    cout << "Warning: Invalid long value or number too large. Please try again." << endl;
-                }
-            }
-
-        } else {
-            cout << "Invalid choice. Try again." << endl;
-            continue;
-        }
-
-        send(clientSocket, (char*)&message, sizeof(Message), 0);
-
-        Message response;
-        int bytesReceived = recv(clientSocket, (char*)&response, sizeof(Message), 0);
+        auto end = std::chrono::high_resolution_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
 
         if (bytesReceived > 0) {
-            if (response.type == TYPE_DOUBLE) {
-                // Використовуємо fixed і setprecision для красивого виведення double без наукового формату
-                cout << "Server response (DOUBLE): " << fixed << setprecision(0);
-
-                // Якщо число дійсно має дробову частину, показуємо до 6 знаків після коми
-                if (response.data.doubleValue != (long)response.data.doubleValue) {
-                    cout << setprecision(6);
-                }
-
-                cout << response.data.doubleValue << endl;
-            } else if (response.type == TYPE_LONG) {
-                cout << "Server response (LONG): " << response.data.longValue << endl;
+            printf("Received response, %d bytes\n", bytesReceived);
+            for (int i = 0; i < 4; i++) {
+                printf("Number %d: %f\n", i+1, response[i]);
             }
+            printf("Total time: %lld ms\n", elapsed);
+        } else {
+            printf("Receive failed with error: %d\n", WSAGetLastError());
         }
     }
 
-    closesocket(clientSocket);
+    fflush(stdout);
+
+    // Закриття сокету
+    closesocket(connectSocket);
     WSACleanup();
+
+    printf("Client shutdown.\n");
+    fflush(stdout);
+
+    system("pause");
     return 0;
 }
